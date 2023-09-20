@@ -19,17 +19,22 @@ package fhttp // import "fortio.org/fortio/fhttp"
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"flag"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/textproto"
+	"crypto/tls"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"fortio.org/fortio/fnet"
 	"fortio.org/fortio/log"
+	"fortio.org/fortio/dflag"
 )
 
 var (
@@ -39,6 +44,8 @@ var (
 	TraceHeader = textproto.CanonicalMIMEHeaderKey("b3")
 	// TraceHeadersPrefix is the prefix for the multi header version of open zipkin.
 	TraceHeadersPrefix = textproto.CanonicalMIMEHeaderKey("x-b3-")
+
+	proxyDelayDuration = dflag.DynDuration(flag.CommandLine, "proxy-delay", 0, "proxy delay")
 )
 
 // TargetConf is the structure to configure one of the multiple targets for MultiServer.
@@ -116,6 +123,10 @@ func (mcfg *MultiServerConfig) TeeHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 	r.Body.Close()
+	delay := proxyDelayDuration.Get()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
 	if mcfg.Serial {
 		mcfg.TeeSerialHandler(w, r, data)
 	} else {
@@ -244,6 +255,7 @@ func CreateProxyClient() *http.Client {
 			// TODO make configurable, should be fine for now for most but extreme -c values
 			MaxIdleConnsPerHost: 128, // must be more than incoming parallelization; divided by number of fan out if using parallel mode
 			MaxIdleConns:        256,
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
 	return client
@@ -273,10 +285,18 @@ func MultiServer(port string, cfg *MultiServerConfig) (*http.ServeMux, net.Addr)
 		if t.MirrorOrigin {
 			t.Destination = strings.TrimSuffix(t.Destination, "/") // remove trailing / because we will concatenate the request URI
 		}
-		if !strings.HasPrefix(t.Destination, "https://") && !strings.HasPrefix(t.Destination, "http://") {
+		if !strings.HasPrefix(t.Destination, "https://") && !strings.HasPrefix(t.Destination, "http://") && !strings.HasPrefix(t.Destination, "/") {
 			log.Infof("Assuming http:// on missing scheme for '%s'", t.Destination)
 			t.Destination = "http://" + t.Destination
 		}
+		if strings.HasPrefix(t.Destination, "/") {
+			// Dial to Unix Socket
+			log.Infof("Going to dial to Unix Socket %v", t.Destination)
+			cfg.client.Transport.(*http.Transport).DialContext = func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", t.Destination[len("http://unix"):])
+			}
+			t.Destination = "http://unix" + t.Destination
+	    }
 	}
 	log.Infof("Multi-server on %s running with %+v", aStr, cfg)
 	mux.HandleFunc("/", cfg.TeeHandler)

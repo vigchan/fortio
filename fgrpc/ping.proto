@@ -1,6 +1,7 @@
 // regenerate the .pb.go file after any change using
 // protoc ping.proto --go_out=plugins=grpc:.
 syntax = "proto3";
+option go_package = "../fgrpc";
 package fgrpc;
 
 message PingMessage {
@@ -8,6 +9,8 @@ message PingMessage {
   int64 ts       = 2; // src send ts / dest receive ts
   string payload = 3; // extra packet data
   int64 delayNanos = 4; // delay the response by x nanoseconds
+  int64 responseLength = 5; // Request the length of the response payload
+  bytes responseBytes = 6; // The response payload in bytes
 }
 
 service PingServer {

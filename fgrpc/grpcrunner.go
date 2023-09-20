@@ -123,6 +123,7 @@ type GRPCRunnerOptions struct {
 	CertOverride       string        // Override the cert virtual host of authority for testing
 	AllowInitialErrors bool          // whether initial errors don't cause an abort
 	UsePing            bool          // use our own Ping proto for grpc load instead of standard health check one.
+        ResponseLength     int           // Length of the response bytes to be returned
 }
 
 // RunGRPCTest runs an http test and returns the aggregated stats.
@@ -182,7 +183,7 @@ func RunGRPCTest(o *GRPCRunnerOptions) (*GRPCRunnerResults, error) {
 			if grpcstate[i].clientP == nil {
 				return nil, fmt.Errorf("unable to create ping client %d for %s", i, o.Destination)
 			}
-			grpcstate[i].reqP = PingMessage{Payload: o.Payload, DelayNanos: o.Delay.Nanoseconds(), Seq: int64(i), Ts: ts}
+			grpcstate[i].reqP = PingMessage{Payload: o.Payload, DelayNanos: o.Delay.Nanoseconds(), ResponseLength: int64(o.ResponseLength), Seq: int64(i), Ts: ts}
 			if o.Exactly <= 0 {
 				_, err = grpcstate[i].clientP.Ping(context.Background(), &grpcstate[i].reqP)
 			}

@@ -40,11 +40,24 @@ const (
 	Error = "ERROR"
 )
 
-type pingSrv struct{}
+type pingSrv struct{
+	Payload string
+}
 
 func (s *pingSrv) Ping(c context.Context, in *PingMessage) (*PingMessage, error) {
 	log.LogVf("Ping called %+v (ctx %+v)", *in, c)
 	out := *in // copy the input including the payload etc
+	if len(s.Payload) > 0 {
+		log.Infof("Overriding Ping response payload, size: %v", len(s.Payload))
+		out.Payload = s.Payload
+	}
+        if in.ResponseLength > 0 {
+                // log.Infof("Generating response by length and overriding other settings")
+                responseLength := int(in.ResponseLength)
+                fnet.ValidatePayloadSize(&responseLength)
+                out.ResponseBytes = fnet.GenerateRandomPayload(responseLength)
+                out.ResponseLength = int64(responseLength)
+        }
 	out.Ts = time.Now().UnixNano()
 	if in.DelayNanos > 0 {
 		s := time.Duration(in.DelayNanos)
@@ -59,7 +72,7 @@ func (s *pingSrv) Ping(c context.Context, in *PingMessage) (*PingMessage, error)
 // get a dynamic server). Pass the healthServiceName to use for the
 // grpc service name health check (or pass DefaultHealthServiceName)
 // to be marked as SERVING. Pass maxConcurrentStreams > 0 to set that option.
-func PingServer(port, cert, key, healthServiceName string, maxConcurrentStreams uint32) net.Addr {
+func PingServer(port, cert, key, healthServiceName string, maxConcurrentStreams uint32, httpOpts *fhttp.HTTPOptions) net.Addr {
 	socket, addr := fnet.Listen("grpc '"+healthServiceName+"'", port)
 	if addr == nil {
 		return nil
@@ -84,7 +97,11 @@ func PingServer(port, cert, key, healthServiceName string, maxConcurrentStreams 
 	healthServer.SetServingStatus(healthServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
 	healthServer.SetServingStatus(healthServiceName+"_down", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
 	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
-	RegisterPingServerServer(grpcServer, &pingSrv{})
+	if httpOpts != nil {
+		RegisterPingServerServer(grpcServer, &pingSrv{Payload: httpOpts.PayloadUTF8()})
+	} else {
+		RegisterPingServerServer(grpcServer, &pingSrv{})
+	}
 	go func() {
 		if err := grpcServer.Serve(socket); err != nil {
 			log.Fatalf("failed to start grpc server: %v", err)
@@ -96,7 +113,7 @@ func PingServer(port, cert, key, healthServiceName string, maxConcurrentStreams 
 // PingServerTCP is PingServer() assuming tcp instead of possible unix domain socket port, returns
 // the numeric port.
 func PingServerTCP(port, cert, key, healthServiceName string, maxConcurrentStreams uint32) int {
-	addr := PingServer(port, cert, key, healthServiceName, maxConcurrentStreams)
+	addr := PingServer(port, cert, key, healthServiceName, maxConcurrentStreams, nil)
 	if addr == nil {
 		return -1
 	}
@@ -107,13 +124,13 @@ func PingServerTCP(port, cert, key, healthServiceName string, maxConcurrentStrea
 
 // PingClientCall calls the ping service (presumably running as PingServer on
 // the destination). returns the average round trip in seconds.
-func PingClientCall(serverAddr string, n int, payload string, delay time.Duration, tlsOpts *fhttp.TLSOptions) (float64, error) {
+func PingClientCall(serverAddr string, n int, payload string, delay time.Duration, responseLength int, tlsOpts *fhttp.TLSOptions) (float64, error) {
 	o := GRPCRunnerOptions{Destination: serverAddr, TLSOptions: *tlsOpts}
 	conn, err := Dial(&o) // somehow this never seem to error out, error comes later
 	if err != nil {
 		return -1, err // error already logged
 	}
-	msg := &PingMessage{Payload: payload, DelayNanos: delay.Nanoseconds()}
+	msg := &PingMessage{Payload: payload, DelayNanos: delay.Nanoseconds(), ResponseLength: int64(responseLength)}
 	cli := NewPingServerClient(conn)
 	// Warm up:
 	_, err = cli.Ping(context.Background(), msg)

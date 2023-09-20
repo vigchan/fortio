@@ -52,6 +52,8 @@ var (
 	fetch2CopiesAllHeader = dflag.DynBool(flag.CommandLine, "proxy-all-headers", true,
 		"Determines if only tracing or all headers (and cookies) are copied from request on the fetch2 ui/server endpoint")
 	serverIdleTimeout = dflag.DynDuration(flag.CommandLine, "server-idle-timeout", 30*time.Second, "Default IdleTimeout for servers")
+	httpsServerCertPath = dflag.DynString(flag.CommandLine, "server-cert", "", "Path to server TLS Cert")
+	httpsServerKeyPath = dflag.DynString(flag.CommandLine, "server-key", "", "Path to server TLS Key")
 )
 
 // EchoHandler is an http server handler echoing back the input.
@@ -190,7 +192,15 @@ func HTTPServerWithHandler(name string, port string, hdlr http.Handler) net.Addr
 		return nil // error already logged
 	}
 	go func() {
-		err := s.Serve(listener)
+		cert := httpsServerCertPath.Get()
+		key := httpsServerKeyPath.Get()
+		var err error
+		if cert != "" && key != "" {
+			log.Infof("Starting HTTPS server on %v using cert %v , key %v", addr.String(), cert, key)
+			err = s.ServeTLS(listener, cert, key)
+		} else {
+			err = s.Serve(listener)
+		}
 		if err != nil {
 			log.Fatalf("Unable to serve %s on %s: %v", name, addr.String(), err)
 		}

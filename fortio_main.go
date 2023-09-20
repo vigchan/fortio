@@ -161,6 +161,7 @@ var (
 	doPingLoadFlag = flag.Bool("ping", false, "grpc load test: use ping instead of health")
 	healthSvcFlag  = flag.String("healthservice", "", "which service string to pass to health check")
 	pingDelayFlag  = flag.Duration("grpc-ping-delay", 0, "grpc ping delay in response")
+	pingResponseLengthFlag  = flag.Int("grpc-response-length", 0, "response length of payload field in ping response")
 	streamsFlag    = flag.Int("s", 1, "Number of streams per grpc connection")
 
 	maxStreamsFlag = flag.Uint("grpc-max-streams", 0,
@@ -264,7 +265,7 @@ func main() {
 			fnet.UDPEchoServer("udp-echo", *udpPortFlag, *udpAsyncFlag)
 		}
 		if *grpcPortFlag != disabled {
-			fgrpc.PingServer(*grpcPortFlag, *bincommon.CertFlag, *bincommon.KeyFlag, fgrpc.DefaultHealthServiceName, uint32(*maxStreamsFlag))
+			fgrpc.PingServer(*grpcPortFlag, *bincommon.CertFlag, *bincommon.KeyFlag, fgrpc.DefaultHealthServiceName, uint32(*maxStreamsFlag), bincommon.SharedHTTPOptions())
 		}
 		if *redirectFlag != disabled {
 			fhttp.RedirectToHTTPS(*redirectFlag)
@@ -428,6 +429,7 @@ func fortioLoad(justCurl bool, percList []float64) {
 			AllowInitialErrors: *allowInitialErrorsFlag,
 			Payload:            httpOpts.PayloadUTF8(),
 			Delay:              *pingDelayFlag,
+                        ResponseLength:     *pingResponseLengthFlag,
 			UsePing:            *doPingLoadFlag,
 		}
 		o.TLSOptions = httpOpts.TLSOptions
@@ -528,7 +530,7 @@ func grpcClient() {
 		}
 		return
 	}
-	_, err := fgrpc.PingClientCall(host, count, httpOpts.PayloadUTF8(), *pingDelayFlag, &httpOpts.TLSOptions)
+	_, err := fgrpc.PingClientCall(host, count, httpOpts.PayloadUTF8(), *pingDelayFlag, *pingResponseLengthFlag, &httpOpts.TLSOptions)
 	if err != nil {
 		// already logged
 		os.Exit(1)
