@@ -23,6 +23,7 @@ import (
 	"runtime/pprof"
 	"strings"
 	"time"
+        //"strconv"
 
 	"fortio.org/fortio/fhttp"
 	"fortio.org/fortio/fnet"
@@ -72,7 +73,9 @@ type GRPCRunnerResults struct {
 	clientH     grpc_health_v1.HealthClient
 	reqH        grpc_health_v1.HealthCheckRequest
 	clientP     PingServerClient
+        clientT     TokiBackendClient
 	reqP        PingMessage
+        reqT        TokiServerRequest
 	RetCodes    HealthResultMap
 	Destination string
 	Streams     int
@@ -87,7 +90,8 @@ func (grpcstate *GRPCRunnerResults) Run(t int) (bool, string) {
 	var res interface{}
 	status := grpc_health_v1.HealthCheckResponse_SERVING
 	if grpcstate.Ping {
-		res, err = grpcstate.clientP.Ping(context.Background(), &grpcstate.reqP)
+		//res, err = grpcstate.clientP.Ping(context.Background(), &grpcstate.reqP)
+		res, err = grpcstate.clientT.TokiServer(context.Background(), &grpcstate.reqT)
 	} else {
 		var r *grpc_health_v1.HealthCheckResponse
 		r, err = grpcstate.clientH.Check(context.Background(), &grpcstate.reqH)
@@ -164,7 +168,7 @@ func RunGRPCTest(o *GRPCRunnerOptions) (*GRPCRunnerResults, error) {
 	out := r.Options().Out // Important as the default value is set from nil to stdout inside NewPeriodicRunner
 	var conn *grpc.ClientConn
 	var err error
-	ts := time.Now().UnixNano()
+	//ts := time.Now().UnixNano()
 	for i := 0; i < numThreads; i++ {
 		r.Options().Runners[i] = &grpcstate[i]
 		if (i % o.Streams) == 0 {
@@ -179,13 +183,17 @@ func RunGRPCTest(o *GRPCRunnerOptions) (*GRPCRunnerResults, error) {
 		grpcstate[i].Ping = o.UsePing
 		var err error
 		if o.UsePing { //nolint:nestif
-			grpcstate[i].clientP = NewPingServerClient(conn)
-			if grpcstate[i].clientP == nil {
-				return nil, fmt.Errorf("unable to create ping client %d for %s", i, o.Destination)
+			//grpcstate[i].clientP = NewPingServerClient(conn)
+			grpcstate[i].clientT = NewTokiBackendClient(conn)
+			if grpcstate[i].clientT == nil {
+				return nil, fmt.Errorf("unable to create toki client %d for %s", i, o.Destination)
 			}
-			grpcstate[i].reqP = PingMessage{Payload: o.Payload, DelayNanos: o.Delay.Nanoseconds(), ResponseLength: int64(o.ResponseLength), Seq: int64(i), Ts: ts}
+			//grpcstate[i].reqP = PingMessage{Payload: o.Payload, DelayNanos: o.Delay.Nanoseconds(), ResponseLength: int64(o.ResponseLength), Seq: int64(i), Ts: ts}
+			grpcstate[i].reqT = TokiServerRequest{Message: o.Payload, Delay: "0"}
 			if o.Exactly <= 0 {
-				_, err = grpcstate[i].clientP.Ping(context.Background(), &grpcstate[i].reqP)
+				//_, err = grpcstate[i].clientT.TokiServer(context.Background(), &grpcstate[i].reqT)
+			        resp, _ := grpcstate[i].clientT.TokiServer(context.Background(), &grpcstate[i].reqT)
+                                log.Infof("Get the response Data %s", resp.Response) 
 			}
 		} else {
 			grpcstate[i].clientH = grpc_health_v1.NewHealthClient(conn)
@@ -275,7 +283,7 @@ func grpcDestination(dest string) (parsedDest string) {
 			parsedDest, port)
 	case strings.HasPrefix(dest, fnet.PrefixHTTPS):
 		parsedDest = strings.TrimSuffix(strings.Replace(dest, fnet.PrefixHTTPS, "", 1), "/")
-		port = fnet.StandardHTTPSPort
+		port = fnet.DefaultGRPCPort //fnet.StandardHTTPSPort
 		log.Infof("stripping https scheme. grpc destination: %v. grpc port: %s",
 			parsedDest, port)
 	default:
