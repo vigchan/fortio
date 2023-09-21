@@ -220,8 +220,8 @@ func RunGRPCTest(o *GRPCRunnerOptions) (*GRPCRunnerResults, error) {
 			}
                         grpcstate[i].reqT = TokiServerRequest{Message: o.Payload, Delay: "0"}
                         if o.Exactly <= 0 {
-				//_, err = grpcstate[i].clientT.TokiServer(context.Background(), &grpcstate[i].reqT)
-			        resp, _ := grpcstate[i].clientT.TokiServer(context.Background(), &grpcstate[i].reqT)
+				//_, err = grpcstate[i].clientT.TokiServer(outCtx, &grpcstate[i].reqT, callOptions...)
+			        resp, _ := grpcstate[i].clientT.TokiServer(outCtx, &grpcstate[i].reqT, callOptions...)
                                 log.Infof("Get the response Data %s", resp.Response) 
 			}
 		} else {
