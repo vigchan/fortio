@@ -81,6 +81,8 @@ type GRPCRunnerResults struct {
 	Streams     int
 	Ping        bool
 	Metadata    metadata.MD
+        clientT     TokiBackendClient
+        reqT        TokiServerRequest
 }
 
 // Run exercises GRPC health check or ping at the target QPS.
@@ -94,7 +96,8 @@ func (grpcstate *GRPCRunnerResults) Run(outCtx context.Context, t periodic.Threa
 		outCtx = metadata.NewOutgoingContext(outCtx, grpcstate.Metadata)
 	}
 	if grpcstate.Ping {
-		res, err = grpcstate.clientP.Ping(outCtx, &grpcstate.reqP)
+		// res, err = grpcstate.clientP.Ping(outCtx, &grpcstate.reqP)
+                res, err = grpcstate.clientT.TokiServer(context.Background(), &grpcstate.reqT)
 	} else {
 		var r *grpc_health_v1.HealthCheckResponse
 		r, err = grpcstate.clientH.Check(outCtx, &grpcstate.reqH)
@@ -183,7 +186,7 @@ func RunGRPCTest(o *GRPCRunnerOptions) (*GRPCRunnerResults, error) {
 	out := r.Options().Out // Important as the default value is set from nil to stdout inside NewPeriodicRunner
 	var conn *grpc.ClientConn
 	var err error
-	ts := time.Now().UnixNano()
+	//ts := time.Now().UnixNano()
 	for i := 0; i < numThreads; i++ {
 		r.Options().Runners[i] = &grpcstate[i]
 		if (i % o.Streams) == 0 {
@@ -203,13 +206,23 @@ func RunGRPCTest(o *GRPCRunnerOptions) (*GRPCRunnerResults, error) {
 			grpcstate[i].Metadata = o.filteredMetadata // the one used to send
 		}
 		if o.UsePing { //nolint:nestif
-			grpcstate[i].clientP = NewPingServerClient(conn)
+			/*grpcstate[i].clientP = NewPingServerClient(conn)
 			if grpcstate[i].clientP == nil {
 				return nil, fmt.Errorf("unable to create ping client %d for %s", i, o.Destination)
 			}
 			grpcstate[i].reqP = PingMessage{Payload: o.Payload, DelayNanos: o.Delay.Nanoseconds(), Seq: int64(i), Ts: ts}
 			if o.Exactly <= 0 {
 				_, err = grpcstate[i].clientP.Ping(outCtx, &grpcstate[i].reqP, callOptions...)
+			}*/
+                        grpcstate[i].clientT = NewTokiBackendClient(conn)
+			if grpcstate[i].clientT == nil {
+				return nil, fmt.Errorf("unable to create toki client %d for %s", i, o.Destination)
+			}
+                        grpcstate[i].reqT = TokiServerRequest{Message: o.Payload, Delay: "0"}
+                        if o.Exactly <= 0 {
+				//_, err = grpcstate[i].clientT.TokiServer(context.Background(), &grpcstate[i].reqT)
+			        resp, _ := grpcstate[i].clientT.TokiServer(context.Background(), &grpcstate[i].reqT)
+                                log.Infof("Get the response Data %s", resp.Response) 
 			}
 		} else {
 			grpcstate[i].clientH = grpc_health_v1.NewHealthClient(conn)
@@ -299,7 +312,7 @@ func grpcDestination(dest string) (parsedDest string) {
 			parsedDest, port)
 	case strings.HasPrefix(dest, fnet.PrefixHTTPS):
 		parsedDest = strings.TrimSuffix(strings.Replace(dest, fnet.PrefixHTTPS, "", 1), "/")
-		port = fnet.StandardHTTPSPort
+		port = fnet.DefaultGRPCPort //fnet.StandardHTTPSPort
 		log.Infof("stripping https scheme. grpc destination: %v. grpc port: %s",
 			parsedDest, port)
 	default:

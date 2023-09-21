@@ -1,0 +1,26 @@
+syntax = "proto3";
+option go_package = "../fgrpc";
+//package fgrpc;
+//option go_package="com.linkedin.toki.grpcbackend.protobuf";
+package com.linkedin.toki.grpcbackend.protobuf;
+
+option java_multiple_files = true;
+option java_package = "com.linkedin.toki.grpcbackend.protobuf";
+option java_outer_classname = "TokiBackendProto";
+option optimize_for = SPEED;
+
+
+service TokiBackend {
+  // Ping the toki backend server
+  rpc TokiServer (TokiServerRequest) returns (Toki) {}
+}
+
+message TokiServerRequest {
+  string message = 1;
+  string delay = 2;
+  string size = 3;
+  double failureProbability = 4;
+}
+message Toki {
+  string response = 1;
+}
