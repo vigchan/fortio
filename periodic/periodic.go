@@ -45,11 +45,12 @@ import (
 // You do not need to use this directly, you can pass a newly created
 // RunnerOptions and 0 valued fields will be reset to these defaults.
 var DefaultRunnerOptions = RunnerOptions{
-	QPS:         8,
-	Duration:    5 * time.Second,
-	NumThreads:  4,
-	Percentiles: []float64{90.0},
-	Resolution:  0.001, // milliseconds
+	QPS:               8,
+	Duration:          7 * time.Second,
+	WarmupAndTearDown: 1 * time.Second,
+	NumThreads:        4,
+	Percentiles:       []float64{90.0},
+	Resolution:        0.001, // milliseconds
 }
 
 type ThreadID int
@@ -193,6 +194,8 @@ type RunnerOptions struct {
 	QPS float64
 	// How long to run the test for. Unless Exactly is specified.
 	Duration time.Duration
+
+	WarmupAndTearDown time.Duration
 	// Note that this actually maps to gorountines and not actual threads
 	// but threads seems like a more familiar name to use for non go users
 	// and in a benchmarking context
@@ -416,6 +419,29 @@ func (r *periodicRunner) Options() *RunnerOptions {
 	return &r.RunnerOptions // sort of returning this here
 }
 
+func (r *periodicRunner) runWarmupQPSSetup(extra string) (numCalls int64) {
+	// r.Duration will be 0 if endless flag has been provided. Otherwise it will have the provided duration time.
+	// r.Exactly is > 0 if we use Exactly iterations instead of the duration.
+	numCalls = int64(r.QPS * r.WarmupAndTearDown.Seconds())
+	if numCalls < 2 {
+		log.Warnf("Increasing the number of calls to the minimum of 2 with 1 thread. total duration will increase")
+		numCalls = 2
+		r.NumThreads = 1
+	}
+	if int64(2*r.NumThreads) > numCalls {
+		newN := int(numCalls / 2)
+		log.Warnf("Lowering number of threads - total call %d -> lowering from %d to %d threads", numCalls, r.NumThreads, newN)
+		r.NumThreads = newN
+	}
+	numCalls /= int64(r.NumThreads)
+	totalCalls := numCalls * int64(r.NumThreads)
+	if log.Log(log.Warning) {
+		_, _ = fmt.Fprintf(r.Out, "Starting at %g qps with %d thread(s) [gomax %d] for %v : %d calls each (total %d)%s\n",
+			r.QPS, r.NumThreads, runtime.GOMAXPROCS(0), r.Duration, numCalls, totalCalls, extra)
+	}
+	return numCalls
+}
+
 func (r *periodicRunner) runQPSSetup(extra string) (requestedDuration string, requestedQPS string, numCalls int64, leftOver int64) {
 	// r.Duration will be 0 if endless flag has been provided. Otherwise it will have the provided duration time.
 	hasDuration := (r.Duration > 0)
@@ -503,6 +529,9 @@ func (r *periodicRunner) Run() RunnerResults {
 	var numCalls int64
 	var leftOver int64 // left over from r.Exactly / numThreads
 	var requestedDuration string
+
+	var wnumCalls int64
+
 	// AccessLogger info check
 	extra := ""
 	if r.AccessLogger != nil {
@@ -511,6 +540,9 @@ func (r *periodicRunner) Run() RunnerResults {
 	requestedQPS := "max"
 	if useQPS {
 		requestedDuration, requestedQPS, numCalls, leftOver = r.runQPSSetup(extra)
+		if r.WarmupAndTearDown > 0 {
+			wnumCalls = r.runWarmupQPSSetup(extra)
+		}
 	} else {
 		requestedDuration, numCalls, leftOver = r.runMaxQPSSetup(extra)
 	}
@@ -523,6 +555,8 @@ func (r *periodicRunner) Run() RunnerResults {
 		log.Warnf("Context array was of %d len, replacing with %d clone of first one", runnersLen, len(r.Runners))
 	}
 	start := time.Now()
+	elapsed := time.Since(start)
+
 	// Histogram  and stats for Function duration - millisecond precision
 	functionDuration := stats.NewHistogram(r.Offset.Seconds(), r.Resolution)
 	errorsDuration := stats.NewHistogram(r.Offset.Seconds(), r.Resolution)
@@ -545,10 +579,23 @@ func (r *periodicRunner) Run() RunnerResults {
 	}
 	if r.NumThreads <= 1 {
 		log.LogVf("Running single threaded")
+		runWarmupOrTearDown(0, runnerChan, wnumCalls, time.Now(), r)
+		start = time.Now()
 		runOne(0, runnerChan, functionDuration, errorsDuration, sleepTime, numCalls+leftOver, start, r)
+		elapsed = time.Since(start)
+		runWarmupOrTearDown(0, runnerChan, wnumCalls, time.Now(), r)
 	} else {
-		var wg sync.WaitGroup
+		var wg, warmWg, tearWg sync.WaitGroup
 		var fDs, eDs, sDs []*stats.Histogram
+		for t := 0; t < r.NumThreads; t++ {
+			warmWg.Add(1)
+			go func(t ThreadID) {
+				runWarmupOrTearDown(t, runnerChan, wnumCalls, time.Now(), r)
+				warmWg.Done()
+			}(ThreadID(t))
+		}
+		warmWg.Wait()
+		start = time.Now()
 		for t := 0; t < r.NumThreads; t++ {
 			durP := functionDuration.Clone()
 			errP := errorsDuration.Clone()
@@ -568,13 +615,22 @@ func (r *periodicRunner) Run() RunnerResults {
 			}(ThreadID(t), durP, errP, sleepP)
 		}
 		wg.Wait()
+		elapsed = time.Since(start)
+
+		for t := 0; t < r.NumThreads; t++ {
+			tearWg.Add(1)
+			go func(t ThreadID) {
+				runWarmupOrTearDown(t, runnerChan, wnumCalls, time.Now(), r)
+				tearWg.Done()
+			}(ThreadID(t))
+		}
+		tearWg.Wait()
 		for t := 0; t < r.NumThreads; t++ {
 			functionDuration.Transfer(fDs[t])
 			errorsDuration.Transfer(eDs[t])
 			sleepTime.Transfer(sDs[t])
 		}
 	}
-	elapsed := time.Since(start)
 	actualQPS := float64(functionDuration.Count) / elapsed.Seconds()
 	if log.Log(log.Warning) {
 		_, _ = fmt.Fprintf(r.Out, "Ended after %v : %d calls. qps=%.5g\n", elapsed, functionDuration.Count, actualQPS)
@@ -732,6 +788,111 @@ func (a *fileAccessLogger) Report(_ context.Context, thread ThreadID, iter int64
 // Info is used to print information about the logger.
 func (a *fileAccessLogger) Info() string {
 	return a.info
+}
+
+func runWarmupOrTearDown(id ThreadID, runnerChan chan struct{}, numCalls int64, start time.Time, r *periodicRunner) {
+	log.Infof("Calling runWarmupOrTearDown...")
+	var i int64
+	endTime := start.Add(r.WarmupAndTearDown)
+	tIDStr := fmt.Sprintf("T%03d", id)
+	perThreadQPS := r.QPS / float64(r.NumThreads)
+	useQPS := (perThreadQPS > 0)
+
+	hasDuration := (r.WarmupAndTearDown > 0)
+
+	f := r.Runners[id]
+	if useQPS && r.Uniform {
+		delayBetweenRequest := 1. / perThreadQPS
+		// When using uniform mode, we should wait a bit relative to our QPS and thread ID.
+		// For example, with 10 threads and 1 QPS, thread 8 should delay 0.7s.
+		delaySeconds := delayBetweenRequest - (delayBetweenRequest / float64(r.NumThreads) * float64(r.NumThreads-int(id)))
+		delayDuration := time.Duration(delaySeconds * float64(time.Second))
+		start = start.Add(delayDuration)
+		log.Debugf("WarmupAndTearDown: %s sleep %v for uniform distribution", tIDStr, delayDuration)
+		select {
+		case <-runnerChan:
+			return
+		case <-time.After(delayDuration):
+			// continue normal execution
+		}
+	}
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, ThreadID(0), id)
+	var ctx2 context.Context
+MainLoopWarm:
+	for {
+		fStart := time.Now()
+		if hasDuration && fStart.After(endTime) {
+			if !useQPS {
+				// max speed test reached end:
+				break
+			}
+			// QPS mode:
+			// Do least 2 iterations, and the last one before bailing because of time
+			if (i >= 2) && (i != numCalls-1) {
+				log.Infof("WarmupAndTearDown: %s warning only did %d out of %d calls before reaching %v", tIDStr, i, numCalls, r.WarmupAndTearDown)
+				break
+			}
+		}
+		ctx2 = ctx
+		//if r.AccessLogger != nil {
+		//	ctx2 = r.AccessLogger.Start(ctx, id, i, fStart)
+		//}
+		//status, details := f.Run(ctx2, id)
+		f.Run(ctx2, id)
+		latency := time.Since(fStart).Seconds()
+		//if r.AccessLogger != nil {
+		//	r.AccessLogger.Report(ctx2, id, i, fStart, latency, status, details)
+		//}
+		// if using QPS / pre calc expected call # mode:
+		if useQPS { //nolint:nestif
+			for {
+				i++
+				if hasDuration && i >= numCalls {
+					break MainLoopWarm // expected exit for that mode
+				}
+				var targetElapsedInSec float64
+				if hasDuration {
+					// This next line is tricky - such as for 2s duration and 1qps there is 1
+					// sleep of 2s between the 2 calls and for 3qps in 1sec 2 sleep of 1/2s etc
+					targetElapsedInSec = (float64(i) + float64(i)/float64(numCalls-1)) / perThreadQPS
+				} else {
+					// Calculate the target elapsed when in endless execution
+					targetElapsedInSec = float64(i) / perThreadQPS
+				}
+				targetElapsedDuration := time.Duration(int64(targetElapsedInSec * 1e9))
+				elapsed := time.Since(start)
+				sleepDuration := targetElapsedDuration - elapsed
+				if r.NoCatchUp && sleepDuration < 0 {
+					// Skip that request as we took too long
+					log.LogVf("%s request took too long %.04f s, would sleep %v, skipping iter %d", tIDStr, latency, sleepDuration, i)
+					continue
+				}
+				if r.Jitter {
+					sleepDuration += getJitter(sleepDuration)
+				}
+				log.Debugf("WarmupAndTearDown: %s target next dur %v - sleep %v", tIDStr, targetElapsedDuration, sleepDuration)
+				select {
+				case <-runnerChan:
+					break MainLoopWarm
+				case <-time.After(sleepDuration):
+					// continue normal execution
+				}
+				break // NoCatchUp false or sleepDuration > 0
+			}
+		} else { // Not using QPS
+			i++
+			select {
+			case <-runnerChan:
+				break MainLoopWarm
+			default:
+				// continue to the next iteration
+			}
+		}
+	}
+	elapsed := time.Since(start)
+	actualQPS := float64(i) / elapsed.Seconds()
+	log.Infof("Warmup/TearDown %s ended after %v : %d calls. qps=%g", tIDStr, elapsed, i, actualQPS)
 }
 
 // runOne runs in 1 go routine (or main one when -c 1 == single threaded mode).

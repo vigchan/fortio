@@ -97,17 +97,18 @@ const (
 var (
 	defaults = &periodic.DefaultRunnerOptions
 	// Very small default so people just trying with random URLs don't affect the target.
-	qpsFlag         = flag.Float64("qps", defaults.QPS, "Queries Per Seconds or 0 for no wait/max qps")
-	numThreadsFlag  = flag.Int("c", defaults.NumThreads, "Number of connections/goroutine/threads")
-	durationFlag    = flag.Duration("t", defaults.Duration, "How long to run the test or 0 to run until ^C")
-	percentilesFlag = flag.String("p", "50,75,90,99,99.9", "List of pXX to calculate")
-	resolutionFlag  = flag.Float64("r", defaults.Resolution, "Resolution of the histogram lowest buckets in seconds")
-	offsetFlag      = flag.Duration("offset", defaults.Offset, "Offset of the histogram data")
-	goMaxProcsFlag  = flag.Int("gomaxprocs", 0, "Setting for runtime.GOMAXPROCS, <1 doesn't change the default")
-	profileFlag     = flag.String("profile", "", "write .cpu and .mem profiles to `file`")
-	grpcFlag        = flag.Bool("grpc", false, "Use GRPC (health check by default, add -ping for ping) for load testing")
-	grpcCompression = flag.Bool("grpc-compression", false, "Enable grpc compression")
-	echoPortFlag    = flag.String("http-port", "8080",
+	qpsFlag            = flag.Float64("qps", defaults.QPS, "Queries Per Seconds or 0 for no wait/max qps")
+	numThreadsFlag     = flag.Int("c", defaults.NumThreads, "Number of connections/goroutine/threads")
+	durationFlag       = flag.Duration("t", defaults.Duration, "How long to run the test or 0 to run until ^C")
+	warmUpTearDownFlag = flag.Duration("warm", defaults.WarmupAndTearDown, "Time to warmup and teardown. Latency will not be calculated")
+	percentilesFlag    = flag.String("p", "50,75,90,99,99.9", "List of pXX to calculate")
+	resolutionFlag     = flag.Float64("r", defaults.Resolution, "Resolution of the histogram lowest buckets in seconds")
+	offsetFlag         = flag.Duration("offset", defaults.Offset, "Offset of the histogram data")
+	goMaxProcsFlag     = flag.Int("gomaxprocs", 0, "Setting for runtime.GOMAXPROCS, <1 doesn't change the default")
+	profileFlag        = flag.String("profile", "", "write .cpu and .mem profiles to `file`")
+	grpcFlag           = flag.Bool("grpc", false, "Use GRPC (health check by default, add -ping for ping) for load testing")
+	grpcCompression    = flag.Bool("grpc-compression", false, "Enable grpc compression")
+	echoPortFlag       = flag.String("http-port", "8080",
 		"http echo server port. Can be in the form of host:port, ip:port, `port` or /unix/domain/path or \""+disabled+"\".")
 	tcpPortFlag = flag.String("tcp-port", "8078",
 		"tcp echo server port. Can be in the form of host:port, ip:port, `port` or /unix/domain/path or \""+disabled+"\".")
@@ -404,19 +405,20 @@ func fortioLoad(justCurl bool, percList []float64, hook bincommon.FortioHook) {
 		log.LogVf("Generated Labels: %s", labels)
 	}
 	ro := periodic.RunnerOptions{
-		QPS:         qps,
-		Duration:    *durationFlag,
-		NumThreads:  *numThreadsFlag,
-		Percentiles: percList,
-		Resolution:  *resolutionFlag,
-		Out:         out,
-		Labels:      labels,
-		Exactly:     *exactlyFlag,
-		Jitter:      *jitterFlag,
-		Uniform:     *uniformFlag,
-		RunID:       *bincommon.RunIDFlag,
-		Offset:      *offsetFlag,
-		NoCatchUp:   *nocatchupFlag,
+		QPS:               qps,
+		Duration:          *durationFlag,
+		NumThreads:        *numThreadsFlag,
+		WarmupAndTearDown: *warmUpTearDownFlag,
+		Percentiles:       percList,
+		Resolution:        *resolutionFlag,
+		Out:               out,
+		Labels:            labels,
+		Exactly:           *exactlyFlag,
+		Jitter:            *jitterFlag,
+		Uniform:           *uniformFlag,
+		RunID:             *bincommon.RunIDFlag,
+		Offset:            *offsetFlag,
+		NoCatchUp:         *nocatchupFlag,
 	}
 	err := ro.AddAccessLogger(*accessLogFileFlag, *accessLogFileFormat)
 	if err != nil {

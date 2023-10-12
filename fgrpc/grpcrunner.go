@@ -83,6 +83,7 @@ type GRPCRunnerResults struct {
 	Metadata    metadata.MD
         clientT     TokiBackendClient
         reqT        TokiServerRequest
+        RespCtrT    int64
 }
 
 // Run exercises GRPC health check or ping at the target QPS.
@@ -96,8 +97,10 @@ func (grpcstate *GRPCRunnerResults) Run(outCtx context.Context, t periodic.Threa
 		outCtx = metadata.NewOutgoingContext(outCtx, grpcstate.Metadata)
 	}
 	if grpcstate.Ping {
-		// res, err = grpcstate.clientP.Ping(outCtx, &grpcstate.reqP)
-                res, err = grpcstate.clientT.TokiServer(context.Background(), &grpcstate.reqT)
+                var resp *Toki
+		//res, err = grpcstate.clientP.Ping(outCtx, &grpcstate.reqP)
+                resp, err = grpcstate.clientT.TokiServer(context.Background(), &grpcstate.reqT)
+                grpcstate.RespCtrT += (int64)(len(resp.Response)/1000)
 	} else {
 		var r *grpc_health_v1.HealthCheckResponse
 		r, err = grpcstate.clientH.Check(outCtx, &grpcstate.reqH)
@@ -220,9 +223,9 @@ func RunGRPCTest(o *GRPCRunnerOptions) (*GRPCRunnerResults, error) {
 			}
                         grpcstate[i].reqT = TokiServerRequest{Message: o.Payload, Delay: "0"}
                         if o.Exactly <= 0 {
-				//_, err = grpcstate[i].clientT.TokiServer(outCtx, &grpcstate[i].reqT, callOptions...)
 			        resp, _ := grpcstate[i].clientT.TokiServer(outCtx, &grpcstate[i].reqT, callOptions...)
-                                log.Infof("Get the response Data %s", resp.Response) 
+                                //log.Infof("Get the response Data %s", resp.Response) 
+                                grpcstate[i].RespCtrT = (int64)(len(resp.Response)/1000)
 			}
 		} else {
 			grpcstate[i].clientH = grpc_health_v1.NewHealthClient(conn)
@@ -278,6 +281,7 @@ func RunGRPCTest(o *GRPCRunnerOptions) (*GRPCRunnerResults, error) {
 			}
 			total.RetCodes[k] += grpcstate[i].RetCodes[k]
 		}
+                total.RespCtrT += grpcstate[i].RespCtrT
 		// TODO: if grpc client needs 'cleanup'/Close like http one, do it on original NumThreads
 	}
 	// Cleanup state:
@@ -287,6 +291,7 @@ func RunGRPCTest(o *GRPCRunnerOptions) (*GRPCRunnerResults, error) {
 		which = "Ping"
 	}
 	_, _ = fmt.Fprintf(out, "Jitter: %t\n", total.Jitter)
+	_, _ = fmt.Printf("The total response bytes in KB: %d\n",total.RespCtrT)
 	for _, k := range keys {
 		_, _ = fmt.Fprintf(out, "%s %s : %d\n", which, k, total.RetCodes[k])
 	}
